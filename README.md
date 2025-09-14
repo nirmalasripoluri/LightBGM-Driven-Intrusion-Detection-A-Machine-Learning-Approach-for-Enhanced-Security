@@ -1,0 +1,2 @@
+# LightBGM-Driven-Intrusion-Detection-A-Machine-Learning-Approach-for-Enhanced-Security
+Intrusion Detection Systems (IDS) are vital for network security. This study uses LightGBM with SMOTE on CICIDS2018, UNSW-NB15, and NF-ToN-IoT datasets to handle class imbalance and diverse attacks. Our SMOTE-LightGBM IDS achieves up to 99% accuracy with low complexity, offering scalable, real-time, and efficient intrusion detection.
