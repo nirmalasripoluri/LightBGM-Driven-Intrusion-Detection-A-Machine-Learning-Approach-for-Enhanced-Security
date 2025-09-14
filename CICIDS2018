@@ -1,0 +1,114 @@
+CICIDS2018
+
+import os
+import pickle
+import traceback
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from imblearn.over_sampling import SMOTE
+from lightgbm import LGBMClassifier
+from sklearn.metrics import classification_report
+
+# === Constants ===
+S3_PATH = "s3://cse-cic-ids2018/Processed Traffic Data for ML Algorithms/Friday-02-03-2018_TrafficForML_CICFlowMeter.csv"
+LOCAL_CSV = "Friday-02-03-2018_TrafficForML_CICFlowMeter.csv"
+PREPROCESSED_FILE = "cic_preprocessed.pkl"
+SPLIT_FILE = "cic_split.pkl"
+SMOTE_FILE = "cic_smote.pkl"
+MODEL_FILE = "cic_lgbm_model.pkl"
+REPORT_FILE = "cic_classification_report.txt"
+
+# 🔥 Always clean old preprocessed files (optional: only for dev/debug)
+for f in [PREPROCESSED_FILE, SPLIT_FILE, SMOTE_FILE]:
+    if os.path.exists(f):
+        os.remove(f)
+
+try:
+    # === Step 0: Download dataset from S3 if not present ===
+    if not os.path.exists(LOCAL_CSV):
+        print("⬇ Downloading dataset from S3...")
+        os.system(f'aws s3 cp --no-sign-request "{S3_PATH}" "{LOCAL_CSV}"')
+        print("✅ Download complete.")
+
+    # === Step 1: Preprocessing ===
+    print("🔄 Preprocessing...")
+    df = pd.read_csv(LOCAL_CSV)
+
+    # Remove infinite and NaN
+    df.replace([float('inf'), -float('inf')], float('nan'), inplace=True)
+    df.dropna(inplace=True)
+
+    # Drop constant features
+    df = df.loc[:, df.nunique() > 1]
+
+    # Clean & encode labels
+    df['Label'] = df['Label'].astype(str).str.strip().str.lower()
+    print("📊 Class distribution before encoding:")
+    print(df['Label'].value_counts())
+
+    df['Label'] = df['Label'].apply(lambda x: 0 if x == 'benign' else 1)
+    print("📊 Class distribution after encoding:")
+    print(df['Label'].value_counts())
+
+    # Drop irrelevant columns
+    drop_cols = ['Flow ID', 'Source IP', 'Destination IP', 'Timestamp', 'Source Port', 'Destination Port', 'Protocol']
+    df.drop(columns=[col for col in drop_cols if col in df.columns], inplace=True)
+
+    with open(PREPROCESSED_FILE, 'wb') as f:
+        pickle.dump(df, f)
+    print("✅ Preprocessed data saved.")
+
+    # === Step 2: Split Dataset ===
+    print("🔄 Splitting dataset with balanced classes in training...")
+    for attempt in range(10):
+        X = df.drop(columns=['Label'])
+        y = df['Label']
+        X_train, X_temp, y_train, y_temp = train_test_split(
+            X, y, test_size=0.3, stratify=y, random_state=42 + attempt
+        )
+        if len(set(y_train)) == 2:
+            print(f"✅ Successful split on attempt {attempt + 1}")
+            break
+    else:
+        raise ValueError("❌ Failed to split with both classes in training after multiple attempts.")
+
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42
+    )
+
+    with open(SPLIT_FILE, 'wb') as f:
+        pickle.dump((X_train, X_val, X_test, y_train, y_val, y_test), f)
+    print("✅ Dataset split saved.")
+
+    # === Step 3: Apply SMOTE ===
+    print("🔄 Applying SMOTE to training data...")
+    print("Before SMOTE:", y_train.value_counts())
+    sm = SMOTE(random_state=42)
+    X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+    print("After SMOTE:", y_train_res.value_counts())
+
+    with open(SMOTE_FILE, 'wb') as f:
+        pickle.dump((X_train_res, y_train_res), f)
+    print("✅ SMOTE data saved.")
+
+    # === Step 4: Train LightGBM ===
+    print("⚙ Training LightGBM...")
+    model = LGBMClassifier(random_state=42)
+    model.fit(X_train_res, y_train_res)
+    with open(MODEL_FILE, 'wb') as f:
+        pickle.dump(model, f)
+    print("✅ Model trained and saved.")
+
+    # === Step 5: Evaluate on test set ===
+    print("📊 Evaluating on test set...")
+    y_pred = model.predict(X_test)
+    report = classification_report(y_test, y_pred)
+    print(report)
+
+    with open(REPORT_FILE, "w") as f:
+        f.write(report)
+    print(f"✅ Classification report saved to {REPORT_FILE}")
+
+except Exception as e:
+    print("\n❌ Error occurred:")
+    traceback.print_exc()
