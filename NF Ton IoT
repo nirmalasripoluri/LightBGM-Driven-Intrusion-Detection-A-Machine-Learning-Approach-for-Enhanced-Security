@@ -1,0 +1,94 @@
+ToN-IoT
+
+import os
+import pickle
+import traceback
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from imblearn.over_sampling import SMOTE
+from lightgbm import LGBMClassifier
+from sklearn.metrics import classification_report
+
+try:
+    # 📂 File paths
+    CSV_FILE = "NF_ToN_IoT.csv"
+    PREPROCESSED_FILE = "iot_preprocessed.pkl"
+    SPLIT_FILE = "iot_split.pkl"
+    SMOTE_FILE = "iot_smote.pkl"
+    MODEL_FILE = "iot_lgbm_model.txt"
+    REPORT_FILE = "iot_classification_report.txt"
+
+    # Step 1: Preprocessing
+    if not os.path.exists(PREPROCESSED_FILE):
+        print("🔄 Preprocessing IoT dataset...")
+        df = pd.read_csv(CSV_FILE)
+
+        # Optional: Label encode attack category for analysis
+        if 'Attack' in df.columns:
+            df['Attack'] = LabelEncoder().fit_transform(df['Attack'])
+
+        # Drop non-useful columns for binary classification
+        df.drop(columns=['Attack'], inplace=True)
+
+        # Save processed data
+        with open(PREPROCESSED_FILE, 'wb') as f:
+            pickle.dump(df, f)
+        print("✅ Preprocessed data saved.")
+    else:
+        print("📦 Loading preprocessed data...")
+        with open(PREPROCESSED_FILE, 'rb') as f:
+            df = pickle.load(f)
+
+    # Step 2: Train-Test-Validation Split
+    if not os.path.exists(SPLIT_FILE):
+        print("🔄 Splitting dataset...")
+        X = df.drop(columns=['Label'])
+        y = df['Label']
+        X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, stratify=y, random_state=42)
+        X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42)
+        with open(SPLIT_FILE, 'wb') as f:
+            pickle.dump((X_train, X_val, X_test, y_train, y_val, y_test), f)
+        print("✅ Dataset split and saved.")
+    else:
+        print("📦 Loading split data...")
+        with open(SPLIT_FILE, 'rb') as f:
+            X_train, X_val, X_test, y_train, y_val, y_test = pickle.load(f)
+
+    # Step 3: Apply SMOTE
+    if not os.path.exists(SMOTE_FILE):
+        print("🔄 Applying SMOTE to balance classes...")
+        sm = SMOTE(random_state=42)
+        X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+        with open(SMOTE_FILE, 'wb') as f:
+            pickle.dump((X_train_res, y_train_res), f)
+        print("✅ SMOTE applied and saved.")
+    else:
+        print("📦 Loading SMOTE-processed data...")
+        with open(SMOTE_FILE, 'rb') as f:
+            X_train_res, y_train_res = pickle.load(f)
+
+    # Step 4: Train LightGBM
+    if not os.path.exists(MODEL_FILE):
+        print("⚙ Training LightGBM model...")
+        model = LGBMClassifier(random_state=42)
+        model.fit(X_train_res, y_train_res)
+        model.booster_.save_model(MODEL_FILE)
+        print("✅ Model trained and saved.")
+    else:
+        print("📦 Loading saved model...")
+        model = LGBMClassifier()
+        model.booster_ = model.booster_.model_from_file(MODEL_FILE)
+
+    # Step 5: Evaluation
+    print("📊 Generating classification report...")
+    y_pred = model.predict(X_test)
+    report = classification_report(y_test, y_pred)
+    print(report)
+    with open(REPORT_FILE, "w") as f:
+        f.write(report)
+    print(f"✅ Report saved to {REPORT_FILE}")
+
+except Exception as e:
+    print("\n❌ Error occurred:")
+    traceback.print_exc()
