@@ -1,0 +1,81 @@
+
+import pickle
+import lightgbm as lgb
+import pandas as pd
+import numpy as np
+from sklearn.metrics import classification_report
+import matplotlib.pyplot as plt
+
+# === File paths for models and splits ===
+datasets = [
+    {
+        "name": "UNSW-NB15",
+        "model_file": "lgbm_model.txt",
+        "split_file": "train_test_split.pkl",
+        "model_type": "txt"
+    },
+    {
+        "name": "CICIDS2018",
+        "model_file": "cic_lgbm_model.pkl",
+        "split_file": "cic_split.pkl",
+        "model_type": "pkl"
+    },
+    {
+        "name": "NF-ToN-IoT",
+        "model_file": "iot_lgbm_model.txt",
+        "split_file": "iot_split.pkl",
+        "model_type": "txt"
+    }
+]
+
+combined_y_true = []
+combined_y_pred = []
+combined_importance = pd.DataFrame()
+
+for data in datasets:
+    with open(data["split_file"], "rb") as f:
+        _, _, X_test, _, _, y_test = pickle.load(f)
+
+    if data["model_type"] == "txt":
+        model = lgb.Booster(model_file=data["model_file"])
+        y_pred = np.round(model.predict(X_test))
+        importance = pd.DataFrame({
+            "Feature": X_test.columns,
+            f"{data['name']}_Importance": model.feature_importance()
+        })
+    elif data["model_type"] == "pkl":
+        with open(data["model_file"], "rb") as f:
+            model = pickle.load(f)
+        y_pred = model.predict(X_test)
+        importance = pd.DataFrame({
+            "Feature": X_test.columns,
+            f"{data['name']}Importance": model.feature_importances
+        })
+
+    combined_y_true.extend(y_test)
+    combined_y_pred.extend(y_pred)
+
+    if combined_importance.empty:
+        combined_importance = importance
+    else:
+        combined_importance = pd.merge(combined_importance, importance, on="Feature", how="outer")
+
+combined_importance.fillna(0, inplace=True)
+combined_importance["Total_Importance"] = combined_importance.drop(columns=["Feature"]).sum(axis=1)
+
+top10_features = combined_importance.sort_values(by="Total_Importance", ascending=False).head(10)
+
+# Generate classification report
+report = classification_report(combined_y_true, combined_y_pred, digits=4)
+print("=== Combined Classification Report for All 3 Datasets ===")
+print(report)
+
+# Plot top 10 features
+plt.figure(figsize=(10, 6))
+plt.barh(top10_features["Feature"][::-1], top10_features["Total_Importance"][::-1], color="darkcyan")
+plt.xlabel("Total Importance Score Across All Datasets")
+plt.title("Top 10 Important Features for Attack Detection (Combined)")
+plt.tight_layout()
+plt.grid(axis='x')
+plt.savefig("top10_combined_features.png")
+plt.show()
