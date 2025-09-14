@@ -1,0 +1,247 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import lightgbm as lgb
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# --- Define Common Features for User Input ---
+COMMON_NUMERIC_FEATURES = [
+    'dur', 'spkts', 'dpkts', 'sbytes', 'dbytes', 'rate', 'sttl', 'dttl',
+    'sload', 'dload', 'sloss', 'dloss', 'sinpkt', 'dinpkt', 'sjit', 'djit',
+    'swin', 'stcpb', 'dtcpb', 'dwin', 'tcprtt', 'synack', 'ackdat', 'smean',
+    'dmean', 'trans_depth', 'response_body_len', 'ct_srv_src', 'ct_state_ttl',
+    'ct_dst_ltm', 'ct_src_dport_ltm', 'ct_dst_sport_ltm', 'ct_dst_src_ltm',
+    'is_ftp_login', 'ct_ftp_cmd', 'ct_flw_http_mthd', 'ct_src_ltm',
+    'ct_srv_dst', 'is_sm_ips_ports'
+]
+
+COMMON_CATEGORICAL_FEATURES = ['proto', 'service', 'state']
+
+trained_models_info = {}
+
+# --- Training Functions ---
+
+def train_unsw_nb15_model():
+    model_name = "UNSW-NB15"
+    try:
+        df_train = pd.read_csv('UNSW_NB15_training-set.csv')
+        df_test = pd.read_csv('UNSW_NB15_testing-set.csv')
+    except FileNotFoundError:
+        print("Error: UNSW-NB15 files not found.")
+        return None, None, None
+
+    X_train = df_train.drop(['id', 'label', 'attack_cat'], axis=1)
+    y_train = df_train['label']
+    X_test = df_test.drop(['id', 'label', 'attack_cat'], axis=1)
+    y_test = df_test['label']
+
+    categorical_features = ['proto', 'service', 'state']
+    for col in categorical_features:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype('category')
+        if col in X_test.columns:
+            X_test[col] = X_test[col].astype('category')
+
+    all_cols = X_train.columns.union(X_test.columns)
+    X_train = X_train.reindex(columns=all_cols, fill_value=0)
+    X_test = X_test.reindex(columns=all_cols, fill_value=0)
+
+    X_train.columns = X_train.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+    X_test.columns = X_test.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+
+    lgb_clf = lgb.LGBMClassifier(objective='binary', random_state=42,
+                                 categorical_feature=[col for col in categorical_features if col in X_train.columns])
+    lgb_clf.fit(X_train, y_train)
+
+    y_pred = lgb_clf.predict(X_test)
+    print(f"{model_name} Test Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+
+    return lgb_clf, X_train.columns.tolist(), categorical_features
+
+
+def train_nf_ton_iot_model():
+    model_name = "NF-ToN-IoT"
+    try:
+        df = pd.read_csv('NF_ToN_IoT.csv')
+    except FileNotFoundError:
+        print("Error: NF_ToN_IoT.csv not found.")
+        return None, None, None
+
+    df.replace([float('inf'), float('-inf')], pd.NA, inplace=True)
+    df.dropna(inplace=True)
+
+    X = df.drop(['Label', 'Attack'], axis=1)
+    y = df['Label']
+
+    categorical_features = ['PROTOCOL', 'TCP_FLAGS']
+    for col in categorical_features:
+        if col in X.columns:
+            X[col] = X[col].astype('category')
+
+    X.columns = X.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+
+    lgb_clf = lgb.LGBMClassifier(objective='binary', random_state=42,
+                                 categorical_feature=[col for col in categorical_features if col in X_train.columns])
+    lgb_clf.fit(X_train, y_train)
+
+    y_pred = lgb_clf.predict(X_test)
+    print(f"{model_name} Test Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+
+    return lgb_clf, X_train.columns.tolist(), categorical_features
+
+
+def train_cicids2018_model():
+    model_name = "CICIDS2018"
+    file_path = 'Friday-02-03-2018_TrafficForML_CICFlowMeter.csv'
+    try:
+        df = pd.read_csv(file_path)
+    except FileNotFoundError:
+        print(f"Error: {file_path} not found.")
+        return None, None, None
+
+    df.replace([float('inf'), float('-inf')], pd.NA, inplace=True)
+    df.dropna(inplace=True)
+
+    df['Label'] = df['Label'].apply(lambda x: 0 if str(x).lower() == 'benign' else 1)
+
+    drop_cols = ['Label', 'Flow ID', 'Timestamp', 'Source IP', 'Destination IP',
+                 'Source Port', 'Destination Port', 'Protocol']
+    drop_cols = [col for col in drop_cols if col in df.columns]
+
+    X = df.drop(columns=drop_cols)
+    y = df['Label']
+    X = X.select_dtypes(include=[float, int])
+
+    X.columns = X.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+
+    lgb_clf = lgb.LGBMClassifier(objective='binary', random_state=42)
+    lgb_clf.fit(X_train, y_train)
+
+    y_pred = lgb_clf.predict(X_test)
+    print(f"{model_name} Test Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+
+    return lgb_clf, X_train.columns.tolist(), []
+
+
+# --- Input and Prediction ---
+
+def get_user_input():
+    print("\n--- Enter values for a single traffic flow ---")
+    user_input = {}
+    for feat in COMMON_NUMERIC_FEATURES:
+        while True:
+            val = input(f"{feat}: ").strip()
+            try:
+                user_input[feat] = float(val)
+                break
+            except ValueError:
+                print("Invalid number.")
+    for feat in COMMON_CATEGORICAL_FEATURES:
+        user_input[feat] = input(f"{feat} (e.g., tcp): ").strip().lower()
+    while True:
+        val = input("SYN Flag Cnt: ").strip()
+        try:
+            user_input['SYN Flag Cnt'] = float(val)
+            break
+        except ValueError:
+            print("Invalid number.")
+    return user_input
+
+
+def prepare_input_for_model(user_input_dict, trained_columns, categorical_cols_for_model):
+    input_df = pd.DataFrame([user_input_dict])
+    input_df.columns = input_df.columns.str.replace('[^A-Za-z0-9_]+', '', regex=True)
+    prepared_df = input_df.reindex(columns=trained_columns, fill_value=0)
+    for col in categorical_cols_for_model:
+        if col in prepared_df.columns:
+            prepared_df[col] = prepared_df[col].astype('category')
+    return prepared_df
+
+
+# --- Main Execution ---
+
+if _name_ == "_main_":
+    print("--- Training All Models ---")
+    model_unsw, cols_unsw, cat_unsw = train_unsw_nb15_model()
+    if model_unsw:
+        trained_models_info['UNSW-NB15'] = (model_unsw, cols_unsw, cat_unsw)
+
+    model_iot, cols_iot, cat_iot = train_nf_ton_iot_model()
+    if model_iot:
+        trained_models_info['NF-ToN-IoT'] = (model_iot, cols_iot, cat_iot)
+
+    model_cic, cols_cic, cat_cic = train_cicids2018_model()
+    if model_cic:
+        trained_models_info['CICIDS2018'] = (model_cic, cols_cic, cat_cic)
+
+    if not trained_models_info:
+        print("❌ No models were trained. Exiting.")
+        sys.exit()
+
+    while True:
+        user_input_data = get_user_input()
+        individual_predictions = []
+
+        for model_name, (model, trained_columns, categorical_cols_for_model) in trained_models_info.items():
+            print(f"\n--- Predicting with {model_name} ---")
+            try:
+                prepared_input = prepare_input_for_model(user_input_data, trained_columns, categorical_cols_for_model)
+                predicted_class = model.predict(prepared_input)[0]
+                prob_attack = model.predict_proba(prepared_input)[0][1]
+                verdict = "Attack" if predicted_class == 1 else "Normal"
+                print(f"  Probability: {prob_attack:.4f} | Verdict: {verdict}")
+                individual_predictions.append((model_name, prob_attack, verdict))
+            except Exception as e:
+                print(f"  Error: {e}")
+                individual_predictions.append((model_name, np.nan, "Error"))
+
+        print("\n--- Final Ensemble Verdict ---")
+        attack_detected_by_any_model = any(v == "Attack" for _, _, v in individual_predictions if v != "Error")
+        for name, prob, verdict in individual_predictions:
+            print(f"  {name}: Probability={prob:.4f}, Verdict={verdict}")
+
+        if attack_detected_by_any_model:
+            print("\n🚨 ENSEMBLE VERDICT: ATTACK DETECTED! 🚨")
+        else:
+            print("\n✅ ENSEMBLE VERDICT: NORMAL TRAFFIC ✅")
+
+        # === Ensemble-Based Feature Importance Plot ===
+        print("\n--- Feature Importance (Ensemble Contributing Models) ---")
+        feature_importance_dfs = []
+        used_models = []
+
+        for model_name, (model, trained_columns, _) in trained_models_info.items():
+            match = next((entry for entry in individual_predictions if entry[0] == model_name), None)
+            if match and match[2] != "Error":
+                try:
+                    feat_imp = pd.Series(model.feature_importances_, index=trained_columns)
+                    feature_importance_dfs.append(feat_imp)
+                    used_models.append(model_name)
+                except Exception as e:
+                    print(f"  Error in {model_name} feature importance: {e}")
+
+        if feature_importance_dfs:
+            combined_importance = pd.concat(feature_importance_dfs, axis=1).fillna(0)
+            combined_importance.columns = used_models
+            mean_importance = combined_importance.mean(axis=1)
+
+            top_n = min(15, len(mean_importance))
+            top_features = mean_importance.nlargest(top_n).sort_values(ascending=True)
+
+            plt.figure(figsize=(10, max(6, top_n * 0.4)))
+            plt.barh(top_features.index, top_features.values,
+                     color='salmon' if attack_detected_by_any_model else 'skyblue')
+            plt.xlabel("Avg Feature Importance")
+            plt.title("Top Contributing Features to Final Verdict")
+            plt.tight_layout()
+            plt.show()
+            plt.close()
+        else:
+            print("No valid feature importances could be computed.")
